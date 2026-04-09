@@ -1,16 +1,9 @@
 //! # MacCleaner
 //!
-//! Консольная утилита для очистки диска на macOS.
+//! Консольная утилита для агрессивной очистки диска на macOS.
 //!
-//! Сканирует и безопасно удаляет кэши, логи, артефакты Xcode
-//! и кэши инструментов разработчика (Homebrew, CocoaPods, Yarn, NPM, Gradle).
-//!
-//! ## Архитектура
-//!
-//! - [`targets`] — определение целей очистки (`CleanTarget`)
-//! - [`cleaner`] — логика сканирования и удаления
-//! - [`ui`] — пользовательский интерфейс (меню, баннер, промпты)
-//! - [`utils`] — утилиты (параллельный подсчёт размера, домашний путь)
+//! Сканирует и безопасно удаляет кэши, логи, артефакты Xcode,
+//! кэши dev-инструментов, System Data, данные Docker и браузеров.
 
 #![deny(clippy::all)]
 
@@ -24,57 +17,75 @@ use colored::*;
 use std::io;
 
 use cleaner::{clean_targets, scan_targets};
-use targets::{get_dev_targets, get_general_targets, get_xcode_targets, CleanTarget};
+use targets::{
+    get_browser_targets, get_dev_targets, get_docker_targets, get_general_targets,
+    get_macos_targets, get_system_data_targets, get_xcode_targets, CleanTarget,
+};
 use ui::{
     clear_screen, is_root, print_banner, print_menu, prompt_clean_targets, restart_with_sudo,
     wait_for_enter,
 };
 
-/// Сканирует все категории (System, Xcode, Developer Tools) и выводит общий итог.
-///
-/// Не удаляет файлы — только подсчитывает размеры и выводит таблицу.
+/// Сканирует ВСЕ категории и выводит общий итог.
 fn scan_all() {
-    let general = get_general_targets();
-    let xcode = get_xcode_targets();
-    let dev = get_dev_targets();
+    let categories: Vec<(Vec<CleanTarget>, &str)> = vec![
+        (get_general_targets(), "System (Caches, Logs, Trash)"),
+        (get_xcode_targets(), "Xcode"),
+        (get_dev_targets(), "Developer Tools"),
+        (get_system_data_targets(), "System Data"),
+        (get_browser_targets(), "Browsers"),
+        (get_docker_targets(), "Docker"),
+        (get_macos_targets(), "macOS"),
+    ];
 
-    let general_size = scan_targets(&general, "System (Caches, Logs, Trash)");
-    let xcode_size = scan_targets(&xcode, "Xcode");
-    let dev_size = scan_targets(&dev, "Developer Tools");
+    let mut grand_total = 0u64;
 
-    println!("\n{}", "=".repeat(100));
+    for (targets, title) in &categories {
+        if targets.is_empty() {
+            continue;
+        }
+        let size = scan_targets(targets, title);
+        grand_total += size;
+    }
+
+    println!("\n{}", "═".repeat(100));
     println!(
         "{}  {}",
         "GRAND TOTAL RECLAIMABLE:".bold(),
-        ByteSize(general_size + xcode_size + dev_size)
-            .to_string()
-            .green()
-            .bold()
+        ByteSize(grand_total).to_string().green().bold()
     );
 }
 
-/// Интерактивный режим очистки.
-///
-/// Собирает все цели из всех категорий, сканирует их размеры,
-/// затем показывает пользователю интерактивный checkbox-список
-/// (через [`dialoguer::MultiSelect`]). Пользователь выбирает
-/// конкретные цели, после чего выполняется очистка с подтверждением.
+/// Интерактивная очистка — выбор из ВСЕХ категорий.
 fn interactive_clean() {
     let mut all_targets = Vec::new();
     all_targets.extend(get_general_targets());
     all_targets.extend(get_xcode_targets());
     all_targets.extend(get_dev_targets());
+    all_targets.extend(get_system_data_targets());
+    all_targets.extend(get_browser_targets());
+    all_targets.extend(get_docker_targets());
+    all_targets.extend(get_macos_targets());
 
     println!("{}", "Scanning all targets...".blue());
 
-    // Scan sizes
     let mut options = Vec::new();
     for target in &all_targets {
-        // We calculate size here. Note: this might take a moment.
         options.push((target, target.size()));
     }
 
-    let selected_indices = prompt_clean_targets(&options);
+    // Фильтруем пустые цели
+    let non_empty: Vec<(&CleanTarget, u64)> = options
+        .into_iter()
+        .filter(|(_, size)| *size > 0)
+        .collect();
+
+    if non_empty.is_empty() {
+        println!("{}", "Nothing to clean! Your disk is already clean.".green());
+        return;
+    }
+
+    let selected_indices = prompt_clean_targets(&non_empty);
 
     if selected_indices.is_empty() {
         println!("{}", "No items selected.".yellow());
@@ -83,10 +94,9 @@ fn interactive_clean() {
 
     let selected_targets: Vec<CleanTarget> = selected_indices
         .into_iter()
-        .map(|i| options[i].0.clone())
+        .map(|i| non_empty[i].0.clone())
         .collect();
 
-    // Confirm and clean
     clean_targets(&selected_targets, "Selected Items");
 }
 
@@ -96,23 +106,38 @@ fn clean_system() {
     clean_targets(&targets, "System (Caches, Logs, Trash)");
 }
 
-/// Очистка артефактов Xcode (DerivedData, Archives, DeviceSupport, CoreSimulator).
+/// Очистка артефактов Xcode.
 fn clean_xcode() {
     let targets = get_xcode_targets();
     clean_targets(&targets, "Xcode");
 }
 
-/// Очистка кэшей инструментов разработчика (Homebrew, CocoaPods, Yarn, NPM, Gradle).
+/// Очистка кэшей dev-инструментов.
 fn clean_dev() {
     let targets = get_dev_targets();
     clean_targets(&targets, "Developer Tools");
 }
 
-/// Точка входа.
-///
-/// Запускает бесконечный цикл главного меню:
-/// очистка экрана → баннер → меню → чтение ввода → вызов функции.
-/// Цикл завершается при выборе "Exit" или ошибке ввода.
+/// Глубокая очистка System Data + Browsers + macOS installers.
+fn deep_clean_system_data() {
+    let mut targets = Vec::new();
+    targets.extend(get_system_data_targets());
+    targets.extend(get_browser_targets());
+    targets.extend(get_macos_targets());
+    clean_targets(&targets, "System Data + Browsers + macOS");
+}
+
+/// Очистка Docker данных.
+fn clean_docker() {
+    let targets = get_docker_targets();
+    if targets.is_empty() {
+        println!("\n{}", "No Docker targets found.".yellow());
+        return;
+    }
+    clean_targets(&targets, "Docker");
+}
+
+/// Точка входа — главный цикл меню.
 fn main() {
     loop {
         clear_screen();
@@ -146,15 +171,23 @@ fn main() {
                 clean_dev();
                 wait_for_enter();
             }
-            "6" if !is_root() => {
+            "6" => {
+                deep_clean_system_data();
+                wait_for_enter();
+            }
+            "7" => {
+                clean_docker();
+                wait_for_enter();
+            }
+            "8" if !is_root() => {
                 restart_with_sudo();
                 wait_for_enter();
             }
-            "6" if is_root() => {
+            "8" if is_root() => {
                 println!("\n{}", "Goodbye!".green().bold());
                 break;
             }
-            "7" | "q" | "Q" if !is_root() => {
+            "9" | "q" | "Q" if !is_root() => {
                 println!("\n{}", "Goodbye!".green().bold());
                 break;
             }

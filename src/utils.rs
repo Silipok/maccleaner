@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
+use std::process::Command;
 use std::sync::Mutex;
 use jwalk::WalkDir;
 
@@ -39,4 +40,31 @@ pub fn get_home_path() -> std::path::PathBuf {
     std::env::var("HOME")
         .map(std::path::PathBuf::from)
         .expect("HOME directory not set")
+}
+
+/// Checks if a command-line program is available in PATH.
+pub fn command_exists(program: &str) -> bool {
+    Command::new("which")
+        .arg(program)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Runs an external command and returns its combined output.
+pub fn run_command(program: &str, args: &[String]) -> std::io::Result<String> {
+    let output = Command::new(program)
+        .args(args)
+        .output()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if !output.status.success() {
+        return Err(std::io::Error::other(
+            format!("Command `{}` failed:\n{}{}", program, stdout, stderr),
+        ));
+    }
+
+    Ok(format!("{}{}", stdout, stderr))
 }

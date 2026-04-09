@@ -1,7 +1,6 @@
 //! Пользовательский интерфейс (TUI).
 //!
-//! Управляет визуальным выводом в терминал:
-//! ASCII-баннер, главное меню, интерактивный промпт для выбора целей,
+//! ASCII-баннер, главное меню, интерактивные промпты,
 //! проверка прав администратора и перезапуск через `sudo`.
 
 use bytesize::ByteSize;
@@ -10,7 +9,7 @@ use dialoguer::{theme::ColorfulTheme, MultiSelect};
 use std::io::{self, Write};
 use std::process::Command;
 
-use crate::targets::CleanTarget;
+use crate::targets::{CleanTarget, RiskLevel};
 
 const BANNER: &str = r#"
 ╔══════════════════════════════════════════════════════════════╗
@@ -22,36 +21,29 @@ const BANNER: &str = r#"
 ║   ██║ ╚═╝ ██║██║  ██║╚██████╗╚██████╗███████╗███████╗       ║
 ║   ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝╚══════╝╚══════╝       ║
 ║                                                              ║
-║              Mac Disk Cleaner v0.1.0                         ║
-║              Free up disk space on macOS                     ║
+║              Mac Disk Cleaner v0.2.0                         ║
+║         Free up disk space on macOS — Aggressive Mode        ║
 ║                                                              ║
 ╚══════════════════════════════════════════════════════════════╝
 "#;
 
-/// Очищает экран терминала с помощью ANSI escape-кодов.
+/// Очищает экран терминала.
 pub fn clear_screen() {
     print!("\x1B[2J\x1B[1;1H");
     io::stdout().flush().unwrap();
 }
 
-/// Выводит ASCII-баннер приложения с названием и версией.
+/// Выводит ASCII-баннер.
 pub fn print_banner() {
     println!("{}", BANNER.cyan().bold());
 }
 
-/// Проверяет, запущен ли процесс от имени суперпользователя (root, UID=0).
-///
-/// Использует `libc::geteuid()` для получения effective UID.
+/// Проверяет, запущен ли процесс от root.
 pub fn is_root() -> bool {
-    // SAFETY: geteuid() is a simple syscall with no memory safety concerns.
-    // It only returns the effective user ID as a u32.
     unsafe { libc::geteuid() == 0 }
 }
 
-/// Перезапускает текущий исполняемый файл через `sudo`.
-///
-/// При успешном перезапуске текущий процесс завершается с кодом 0.
-/// При ошибке выводит сообщение и возвращается в меню.
+/// Перезапускает через `sudo`.
 pub fn restart_with_sudo() {
     let exe = std::env::current_exe().expect("Failed to get current executable path");
     println!("\n{}", "Requesting administrator privileges...".yellow());
@@ -71,84 +63,69 @@ pub fn restart_with_sudo() {
     }
 }
 
-/// Выводит главное меню.
-///
-/// Набор пунктов зависит от прав пользователя:
-/// - Обычный пользователь: 7 пунктов (включая "Run as Administrator")
-/// - Root: 6 пунктов ("Run as Administrator" заменяется на "Exit")
+/// Выводит главное меню с новыми категориями.
 pub fn print_menu() {
     if is_root() {
-        println!("{}", "[Running as Administrator]".green().bold());
+        println!("{}", "  [Running as Administrator]".green().bold());
     } else {
         println!(
             "{}",
-            "[Running as normal user - some items may be protected]".yellow()
+            "  [Running as normal user — some items need sudo]".yellow()
         );
     }
     println!();
 
-    println!("{}", "┌──────────────────────────────────────┐".cyan());
-    println!("{}", "│           MAIN MENU                  │".cyan());
-    println!("{}", "├──────────────────────────────────────┤".cyan());
-    println!(
-        "{}  {}  {}",
-        "│".cyan(),
-        "1.".yellow().bold(),
-        "Interactive Clean           │".white()
-    );
-    println!(
-        "{}  {}  {}",
-        "│".cyan(),
-        "2.".yellow().bold(),
-        "Scan all                    │".white()
-    );
-    println!(
-        "{}  {}  {}",
-        "│".cyan(),
-        "3.".yellow().bold(),
-        "Quick Clean System          │".white()
-    );
-    println!(
-        "{}  {}  {}",
-        "│".cyan(),
-        "4.".yellow().bold(),
-        "Clean Xcode                 │".white()
-    );
-    println!(
-        "{}  {}  {}",
-        "│".cyan(),
-        "5.".yellow().bold(),
-        "Clean Developer Tools       │".white()
-    );
+    println!("{}", "┌──────────────────────────────────────────┐".cyan());
+    println!("{}", "│              MAIN MENU                   │".cyan());
+    println!("{}", "├──────────────────────────────────────────┤".cyan());
+
+    let items = vec![
+        ("1", "Interactive Clean"),
+        ("2", "Scan All"),
+        ("3", "Quick Clean System"),
+        ("4", "Clean Xcode"),
+        ("5", "Clean Developer Tools"),
+        ("6", "Deep Clean System Data"),
+        ("7", "Clean Docker"),
+    ];
+
+    for (num, label) in &items {
+        println!(
+            "{}  {}  {}",
+            "│".cyan(),
+            num.yellow().bold(),
+            format!("{:<36}│", label).white()
+        );
+    }
 
     if !is_root() {
         println!(
             "{}  {}  {}",
             "│".cyan(),
-            "6.".yellow().bold(),
-            "Run as Administrator (sudo) │".white()
+            "8".yellow().bold(),
+            "Run as Administrator (sudo)        │".white()
         );
         println!(
             "{}  {}  {}",
             "│".cyan(),
-            "7.".yellow().bold(),
-            "Exit                        │".white()
+            "9".yellow().bold(),
+            "Exit                               │".white()
         );
     } else {
         println!(
             "{}  {}  {}",
             "│".cyan(),
-            "6.".yellow().bold(),
-            "Exit                        │".white()
+            "8".yellow().bold(),
+            "Exit                               │".white()
         );
     }
-    println!("{}", "└──────────────────────────────────────┘".cyan());
+    println!("{}", "└──────────────────────────────────────────┘".cyan());
     println!();
     print!("{}", "Enter your choice: ".green().bold());
     io::stdout().flush().unwrap();
 }
 
-/// Ожидает нажатия Enter для возврата в меню.
+/// Ожидает нажатия Enter.
 pub fn wait_for_enter() {
     println!();
     print!("{}", "Press Enter to continue...".dimmed());
@@ -157,14 +134,7 @@ pub fn wait_for_enter() {
     let _ = io::stdin().read_line(&mut input);
 }
 
-/// Показывает интерактивный список с множественным выбором.
-///
-/// Для каждой цели отображаются: категория, имя, размер и описание.
-/// Пользователь выбирает элементы клавишей `Space` и подтверждает клавишей `Enter`.
-///
-/// # Returns
-///
-/// Вектор индексов выбранных элементов из входного массива.
+/// Интерактивный множественный выбор целей с бейджами риска и sudo.
 pub fn prompt_clean_targets(items: &[(&CleanTarget, u64)]) -> Vec<usize> {
     if items.is_empty() {
         println!("{}", "No targets found.".yellow());
@@ -174,18 +144,32 @@ pub fn prompt_clean_targets(items: &[(&CleanTarget, u64)]) -> Vec<usize> {
     let options: Vec<String> = items
         .iter()
         .map(|(target, size)| {
+            let risk_badge = match target.risk_level {
+                RiskLevel::Low => "".to_string(),
+                RiskLevel::Medium => " ⚠MED".yellow().to_string(),
+                RiskLevel::High => " 🚨HIGH".red().bold().to_string(),
+            };
+
+            let sudo_badge = if target.requires_sudo && !is_root() {
+                " [SUDO]".magenta().to_string()
+            } else {
+                "".to_string()
+            };
+
             format!(
-                "[{}] {} ({}) - {}",
+                "[{}] {} ({}){}{} - {}",
                 target.category.blue(),
                 target.name.bold(),
                 ByteSize(*size).to_string().yellow(),
+                risk_badge,
+                sudo_badge,
                 target.description.dimmed()
             )
         })
         .collect();
 
     let selection = MultiSelect::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select items to clean (Space to select, Enter to confirm):")
+        .with_prompt("Select items to clean (Space = select, Enter = confirm):")
         .items(&options)
         .interact()
         .unwrap_or_default();
